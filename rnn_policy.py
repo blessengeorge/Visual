@@ -4,6 +4,7 @@ import random
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision.models as models
 import torch.autograd as autograd
 from torch.autograd import Variable
 import torchvision.transforms as T
@@ -17,30 +18,42 @@ layer_dict = {
                 2: "MaxPool"
 }
 
+def makeVggNet():
+    return models.vgg16()
+
 def getLayerInfo(model):
     features = []
     for feature in model.features:
         if (str(feature).startswith('Conv')):
-            features.append(('Conv2D', feature.kernel_size[0], feature.stride[0], feature.padding[0], feature.out_channels))
-    return features
+            features.append((1, feature.kernel_size[0], feature.stride[0], feature.padding[0], feature.out_channels))
+    return features, torch.Tensor(features)
 
 class LayerRemovalPolicyNetwork(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, input_size=5, hidden_size=5, output_size=2):
         super(LayerRemovalPolicyNetwork, self).__init__()
-        self.lstm = nn.LSTM(10, 20, bidirectional=True)
-        self.fc = nn.Linear(hidden_size, output_size)
-        self.hidden = self.init_hidden_weights(hidden_size)
+        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional=True)
+        self.hidden = self.init_hidden_weights(hidden_size, 1, 2)
+        # self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
+        print(self.hidden)
+        m = self.hidden
         output, self.hidden = self.lstm(x, (self.hidden, self.hidden))         # WHAT DOES THIS SELF.LSTM DO? WY DOES IT RETURN TWO THINGS?
-        output = self.fc(output.view(-1, output.size(2)))
-        print(output.view(-1, output.size(2)).size())
-        print(output.size())
-        output = nn.Softmax()(output)
+        print(self.hidden)
+        self.hidden = m
+        # output = self.fc(output.view(-1, output.size(2)*2))
+        # print(output.view(-1, output.size(2)).size())
+        # print(output.size())
+        output = nn.Softmax()(output.view(-1, output.size(2)*2))
         return output
 
-    def init_hidden_weights(self, hidden_size):
-        return Variable(torch.rand(2, 3, 20))
+    def init_hidden_weights(self, hidden_size, batch_size=1, num_directions=1):
+        return Variable(torch.rand(num_directions, batch_size, hidden_size))
+
+l = LayerRemovalPolicyNetwork()
+model = models.vgg16()
+_, features = getLayerInfo(model)
+l(Variable(features[0]).view(1,-1))
 
 # import torch
 # import torchvision
