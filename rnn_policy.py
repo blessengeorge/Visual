@@ -55,6 +55,28 @@ model = models.vgg16()
 _, features = getLayerInfo(model)
 l(Variable(features[0]).view(1,-1))
 
+
+def countParam(model):
+	features=getLayerInfo(model)	
+	parm=len(features)
+	return parm
+
+def compressionReward(modelT,modelS):
+	paramT = countParam(modelT)
+	paramS = countParam(modelS)
+	c=paramS/paramT
+	c=1-c
+	Rc=c*(2-c)
+	return Rc
+
+def accuracyReward(model,accuTeacher)
+	#train(model) for 5 epoch
+	#calculate acuuracy as a
+	k=a/accuTeacher
+	Ra=min(k,1)
+	return ra
+
+
 # import torch
 # import torchvision
 # import torch.nn as nn
