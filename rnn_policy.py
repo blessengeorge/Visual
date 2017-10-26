@@ -32,26 +32,47 @@ class LayerRemovalPolicyNetwork(nn.Module):
     def __init__(self, input_size=5, hidden_size=5, output_size=2):
         super(LayerRemovalPolicyNetwork, self).__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, bidirectional=True)
+        self.fc = nn.Linear(hidden_size*2, output_size)
+
         self.hidden = self.init_hidden_weights(hidden_size, 1, 2)
-        # self.fc = nn.Linear(hidden_size, output_size)
+        self.cell_state = self.init_hidden_weights(hidden_size, 1, 2)
 
     def forward(self, x):
-        print(self.hidden)
-        m = self.hidden
-        output, self.hidden = self.lstm(x, (self.hidden, self.hidden))         # WHAT DOES THIS SELF.LSTM DO? WY DOES IT RETURN TWO THINGS?
-        print(self.hidden)
-        self.hidden = m
-        # output = self.fc(output.view(-1, output.size(2)*2))
+        output, (self.hidden, self.cell_state) = self.lstm(x, (self.hidden, self.cell_state))         # WHAT DOES THIS SELF.LSTM DO? WY DOES IT RETURN TWO THINGS?
+        # print(self.hidden)
+
+        output = self.fc(output.view(-1, output.size(2)*2))
+        print(output.size())
         # print(output.view(-1, output.size(2)).size())
         # print(output.size())
-        output = nn.Softmax()(output.view(-1, output.size(2)*2))
+        output = nn.Softmax()(output)
         return output
 
     def init_hidden_weights(self, hidden_size, batch_size=1, num_directions=1):
         return Variable(torch.rand(num_directions, batch_size, hidden_size))
 
+def countParam(model):
+	features=getLayerInfo(model)
+	parm=len(features)
+	return parm
+
+def compressionReward(modelT,modelS):
+	paramT = countParam(modelT)
+	paramS = countParam(modelS)
+	c=paramS/paramT
+	c=1-c
+	Rc = c*(2-c)
+	return Rc
+
+def accuracyReward(model,accuTeacher)
+	#train(model) for 5 epoch
+	#calculate acuuracy as a
+	k=a/accuTeacher
+	Ra = min(k,1)
+    return Ra
+
 l = LayerRemovalPolicyNetwork()
-model = models.vgg16()
+# model = models.vgg16()
 _, features = getLayerInfo(model)
 l(Variable(features[0]).view(1,-1))
 
@@ -71,7 +92,10 @@ l(Variable(features[0]).view(1,-1))
 # input = Variable(torch.randn(5, 3, 10))
 # h0 = Variable(torch.randn(2, 3, 20))
 # c0 = Variable(torch.randn(2, 3, 20))
-# output, hn = rnn(input, (h0, c0))
+# output, (h0, c0) = rnn(input, (h0, c0))
+# output, (h0, c0) = rnn(input, (h0, c0))
+# output, (h0, c0) = rnn(input, (h0, c0))
+
 #
 
 # yukezhu tensorflow reinforce
