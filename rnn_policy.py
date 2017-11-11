@@ -11,6 +11,11 @@ from torch.autograd import Variable
 import torchvision.transforms as transforms
 import collections
 import copy
+import os
+
+from torch.autograd import Variable
+
+from PIL import Image
 
 #TO-DO
 # Create policy networks
@@ -21,118 +26,57 @@ num_epochs = 2
 learning_rate = 0.01
 num_iterations = 10
 
-# layer_dict = {
-#                 1: "Conv2D",
-#                 2: "MaxPool"
-# }
+#	Creates a dictionary for class name to index/label conversion
+def class_to_index(root):
+	class_list = sorted([directory for directory in os.listdir(root)])
+	class_to_labels = {class_list[i]: i for i in range(len(class_list))}
+	return class_to_labels
 
-train_dataset = datasets.CIFAR10(root='./CIFAR_data', train=True, download=True, transform=transforms.ToTensor())
-test_dataset = datasets.CIFAR10(root='./CIFAR_data', train=False, download=True, transform=transforms.ToTensor())
+# 	Creates a list of image file path and label pairs
+def create_dataset(root, class_to_labels):
+	dataset = []
+	for label in sorted(class_to_labels.keys()):
+		path = os.path.join(root, label)
+		for image_file in os.listdir(path):
+			image_file = os.path.join(path, image_file)
+			if os.path.isfile(image_file):
+				dataset.append((image_file, class_to_labels[label]))
+	return dataset
+
+
+class CDATA(torch.utils.data.Dataset): # Extend PyTorch's Dataset class
+    def __init__(self, root, train, transform=None):
+	self.root = root
+	self.train = train
+	self.transform = transform
+
+	if train:
+		image_folder = os.path.join(self.root, "train")
+
+	else:
+		image_folder = os.path.join(self.root, "test")
+
+	class_to_labels = class_to_index(image_folder)
+	self.dataset = create_dataset(image_folder, class_to_labels)
+
+    def __len__(self):
+	return len(self.dataset)
+
+    def __getitem__(self, idx):
+	image_path, label = self.dataset[idx]
+	image = Image.open(image_path).convert('RGB')
+	if self.transform is not None:
+		image = self.transform(image)
+	return (image, label)
+
+input_size = 32
+composed_transform = transforms.Compose([transforms.Scale((input_size,input_size)),transforms.ToTensor()])
+
+train_dataset = CDATA(root='./CDATA/notMNIST_small', train=True, transform=composed_transform)
+test_dataset = CDATA(root='./CDATA/notMNIST_small', train=False, transform=composed_transform)
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
-
-def makeVggNet():
-    return models.vgg16()
-
-'''
-Goes through the layers of the model using its feature dictionary.
-It stores the information of each layer in an ordered dictionary and returns the value.
-'''
-def getLayerInfo(model):
-    features = collections.OrderedDict()
-    featureDictionary = model._modules
-    for index in featureDictionary:
-        feature = featureDictionary[index]
-        if (str(feature).startswith('Conv') and feature.in_channels == feature.out_channels):
-            features[index] = (1, feature.kernel_size[0], feature.stride[0], feature.padding[0], feature.out_channels)
-    return features
-
-'''
-Creates a layer removal policy network using a bi-directional LSTM
-It outputs the probability of removing vs keeping a layer
-'''
-class LayerRemovalPolicyNetwork(nn.Module):
-    def __init__(self, input_size=5, hidden_size=5, output_size=2):
-        super(LayerRemovalPolicyNetwork, self).__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional=True)
-        self.fc = nn.Linear(hidden_size*2, output_size)
-        self.hidden = self.init_hidden_weights(hidden_size, 1, 2)
-        self.cell_state = self.init_hidden_weights(hidden_size, 1, 2)
-
-    def forward(self, x):
-        output, (self.hidden, self.cell_state) = self.lstm(x, (self.hidden, self.cell_state))         # WHAT DOES THIS SELF.LSTM DO? WY DOES IT RETURN TWO THINGS?
-        output = self.fc(output.view(-1, output.size(2)*2))
-        output = nn.Softmax()(output)
-        return output
-
-    def init_hidden_weights(self, hidden_size, batch_size=1, num_directions=1):
-        return Variable(torch.rand(num_directions, batch_size, hidden_size))
-
-'''
-Create an exact copy of the teacher network - student network.
-Go through the layers of the student network one by one.
-Prune the layers based on decision taken by the LayerRemovalPolicyNetwork
-Return student network
-'''
-def pruneLayers(model):
-    student_model = copy.deepcopy(model)
-    model_features = getLayerInfo(student_model)
-    l = LayerRemovalPolicyNetwork()
-    for index in model_features:
-        feature = model_features[index]
-        if (l(Variable(torch.Tensor(feature)).view(1,-1)))[0][0].data[0] > 0.5:
-            del(student_model._modules[index])
-    return student_model
-
-'''
-Train the student network using the logits of the teacher network
-'''
-
-def mse_loss(input, target):
-    return torch.sum((input.data - target.data)**2) / input.data.nelement()
-
-def train(teacher_model, student_model):
-    criterion = nn.MSELoss()
-    # criterion = mse_loss
-    optimizer = torch.optim.Adam(student_model.parameters(), lr=learning_rate)
-    for epoch in range(num_epochs):
-        for i, (images, labels) in enumerate(train_loader):
-            images = Variable(images).cuda()
-            labels = Variable(labels).cuda()
-            teacher_outputs = teacher_model(images)
-            teacher_outputs = Variable(teacher_outputs.data)
-
-            optimizer.zero_grad()
-            student_outputs = student_model(images)
-            print(student_outputs.size())
-            error = criterion(student_outputs, teacher_outputs)
-            error.backward()
-            optimizer.step()
-            if (i+1) % (1000/batch_size) == 0:
-                print (error.data[0])
-            print("Epoch Complete")
-    return student_model
-
-def test(model):
-    correct = 0
-    total = 0
-
-    for images, labels in test_loader:
-	images = Variable(images).cuda()
-
-        #if(use_gpu):
-         #   images = images.cuda()
-
-        outputs = model(images)
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        #print(predicted.cpu())
-        correct += (predicted.cpu() == labels.cpu()).sum()
-	print(correct, total)
-    print('Accuracy of the network on the 10000 test images: %d %%' % (100 * correct / total))
-
-input_size=32
 
 class CustomResnet(nn.Module): # Extend PyTorch's Module class
 	def __init__(self, num_classes = 10):
@@ -206,64 +150,178 @@ class CustomResnet(nn.Module): # Extend PyTorch's Module class
 
 		return x
 
-def runLayerRemoval():
-    teacher_model = CustomResnet(num_classes=10)
-    print("OK")
-    teacher_model = torch.load("teacher_net.pt")
-    teacher_model.cuda()
-
-    l = LayerRemovalPolicyNetwork()
-    features = getLayerInfo(teacher_model)
-
-    student_model = pruneLayers(teacher_model)
-    print("OK")
-
-    student_model = train(teacher_model, student_model)
-    test(student_model)
-
-runLayerRemoval()
 '''
+Goes through the layers of the model using its feature dictionary.
+It stores the information of each layer in an ordered dictionary and returns the value.
+'''
+def getLayerInfo(model):
+    features = collections.OrderedDict()
+    featureDictionary = model._modules
+    for index in featureDictionary:
+        feature = featureDictionary[index]
+        if (str(feature).startswith('Conv') and feature.in_channels == feature.out_channels):
+            features[index] = (1, feature.kernel_size[0], feature.stride[0], feature.padding[0], feature.out_channels)
+    return features
 
 '''
+Creates a layer removal policy network using a bi-directional LSTM
+It outputs the probability of removing vs keeping a layer
+'''
+class LayerRemovalPolicyNetwork(nn.Module):
+    def __init__(self, input_size=5, hidden_size=5, output_size=2):
+        super(LayerRemovalPolicyNetwork, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional=True)
+        self.fc = nn.Linear(hidden_size*2, output_size)
+        self.hidden = self.init_hidden_weights(hidden_size, 1, 2)
+        self.cell_state = self.init_hidden_weights(hidden_size, 1, 2)
+
+    def forward(self, x):
+        output, (self.hidden, self.cell_state) = self.lstm(x, (self.hidden, self.cell_state))         # WHAT DOES THIS SELF.LSTM DO? WY DOES IT RETURN TWO THINGS?
+        output = self.fc(output.view(-1, output.size(2)*2))
+        output = nn.Softmax()(output)
+        return output
+
+    def init_hidden_weights(self, hidden_size, batch_size=1, num_directions=1):
+        return Variable(torch.rand(num_directions, batch_size, hidden_size))
+
+'''
+Create an exact copy of the teacher network - student network.
+Go through the layers of the student network one by one.
+Prune the layers based on decision taken by the LayerRemovalPolicyNetwork
+Return student network
+'''
+def pruneLayers(policyNetwork, model):
+    student_model = copy.deepcopy(model)
+    model_features = getLayerInfo(student_model)
+    actionProbability = []
+    for index in model_features:
+        feature = model_features[index]
+        probabilities = policyNetwork(Variable(torch.Tensor(feature)).view(1,-1))
+        actionProbability.append(probabilities.multinomial())
+        probability = probabilities.data.numpy().astype(float).flatten().tolist()[0]
+        probabilities = [probability, 1-probability]
+        print(probabilities)
+        if (np.random.choice([1,0], p=probabilities)):
+            print("PRUNED")
+            del(student_model._modules[index])
+        else:
+            print("NOT PRUNED")
+    return student_model, actionProbability
+
+'''
+Train the student network using the logits of the teacher network
+'''
+
+def mse_loss(input, target):
+    return torch.sum((input.data - target.data)**2) / input.data.nelement()
+
+def train(teacher_model, student_model):
+    criterion = nn.MSELoss()
+    # criterion = mse_loss
+    optimizer = torch.optim.Adam(student_model.parameters(), lr=learning_rate)
+    for epoch in range(num_epochs):
+        for i, (images, labels) in enumerate(train_loader):
+            images = Variable(images).cuda()
+            labels = Variable(labels).cuda()
+            teacher_outputs = teacher_model(images)
+            teacher_outputs = Variable(teacher_outputs.data)
+
+            optimizer.zero_grad()
+            student_outputs = student_model(images)
+            error = criterion(student_outputs, teacher_outputs)
+            error.backward()
+            optimizer.step()
+    return student_model
+
+def test(model):
+    correct = 0
+    total = 0
+
+    for images, labels in test_loader:
+	images = Variable(images).cuda()
+
+        #if(use_gpu):
+         #   images = images.cuda()
+
+        outputs = model(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        #print(predicted.cpu())
+        correct += (predicted.cpu() == labels.cpu()).sum()
+	print(correct, total)
+    accuracy = (100 * correct / total)
+    print('Accuracy of the network on the 10000 test images: %d %%' % (100 * correct / total))
+    return accuracy
+
+input_size=32
 
 def countParam(model):
 	features=getLayerInfo(model)
 	parm=len(features)
 	return parm
 
-def compressionReward(modelT,modelS):
-	paramT = countParam(modelT)
-	paramS = countParam(modelS)
-	c=paramS/paramT
-	c=1-c
+def compressionReward(studentParameters,teacherParameters):
+	c = 1-1.0*studentParameters/teacherParameters
 	Rc = c*(2-c)
 	return Rc
 
-def accuracyReward(model,accuTeacher):
-	k=a/accuTeacher
+def accuracyReward(studentAccuracy,teacherAccuracy):
+	k = 1.0*studentAccuracy/teacherAccuracy
 	Ra = min(k,1)
 	return Ra
 
+def runLayerRemoval():
+    teacherAccuracy = 70
+    teacher_model = CustomResnet(num_classes=10)
+    print("OK")
+    teacher_model = torch.load("teacher_net.pt")
+    teacher_model.cuda()
 
-def countParam(model):
-	features=getLayerInfo(model)	
-	parm=len(features)
-	return parm
+    policyNetwork = LayerRemovalPolicyNetwork()
+    features = getLayerInfo(teacher_model)
 
-def compressionReward(modelT,modelS):
-	paramT = countParam(modelT)
-	paramS = countParam(modelS)
-	c=paramS/paramT
-	c=1-c
-	Rc=c*(2-c)
-	return Rc
+    teacherAccuracy = test(teacher_model)
+    for i in range(10):
+        student_model, actions = pruneLayers(policyNetwork, teacher_model)
+        print("OK")
 
-def accuracyReward(model,accuTeacher)
-	#train(model) for 5 epoch
-	#calculate acuuracy as a
-	k=a/accuTeacher
-	Ra=min(k,1)
-	return ra
+        student_model = train(teacher_model, student_model)
+        # teacherAccuracy = test(teacher_model)
+        studentAccuracy = test(student_model)
+        teacherParameters = countParam(teacher_model)
+        studentParameters = countParam(student_model)
+
+        baseline = 0.4
+        Rc = compressionReward(studentParameters, teacherParameters)
+        Ra = accuracyReward(studentAccuracy, teacherAccuracy)
+
+        print("n", Rc, Ra, "\n")
+        rewards = []
+        for item in actions:
+            rewards.append(-(Ra*Rc - baseline))
+
+        for action, r in zip(actions, rewards):
+            print(r)
+            action.reinforce(r)
+
+        optimizer = torch.optim.Adam(student_model.parameters(), lr=learning_rate)
+        optimizer.zero_grad()
+        #actions.backward()
+        autograd.backward(actions, [None for _ in actions], retain_graph=True)
+        optimizer.step()
+        # rewards = []
+        # for i in len(actions):
+        #     rewards.append(Ra)
+        #
+        # for action, r in zip(actions, rewards):
+        #     action.reinforce(r)
+    return student_model
+
+output_model = runLayerRemoval()
+test(output_model)
+'''
+
+'''
 
 
 # import torch
